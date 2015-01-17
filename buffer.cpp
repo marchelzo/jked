@@ -1,9 +1,20 @@
+#include <iostream>
+
 #include "buffer.hpp"
+
+Line::Line():
+    content {},
+    prev {nullptr},
+    next {nullptr}
+{
+}
 
 Buffer::Buffer():
     current {new Line},
     current_line {1},
-    num_lines    {1}
+    num_lines    {1},
+    history {},
+    history_index {-1}
 {
     first = current;
     last  = current;
@@ -23,6 +34,16 @@ Delete::Delete(std::string s, size_t row, size_t col):
 {
 }
 
+NewLine::NewLine(size_t row):
+    row {row}
+{
+}
+
+DeleteLine::DeleteLine(size_t row):
+    row {row}
+{
+}
+
 std::unique_ptr<Transformation> Insert::inverted() const
 {
     return std::make_unique<Delete>(s, row, col);
@@ -35,32 +56,32 @@ std::unique_ptr<Transformation> Delete::inverted() const
 
 std::unique_ptr<Transformation> NewLine::inverted() const
 {
-    return std::make_unique<DeleteLine>();
+    return std::make_unique<DeleteLine>(row);
 }
 
 std::unique_ptr<Transformation> DeleteLine::inverted() const
 {
-    return std::make_unique<NewLine>();
+    return std::make_unique<NewLine>(row);
 }
 
-void Insert::apply(Buffer& b) const
+bool Insert::apply(Buffer& b) const
 {
-
+    return b.insert(row, col, s);
 }
 
-void Delete::apply(Buffer& b) const
+bool Delete::apply(Buffer& b) const
 {
-    
+    return b.erase(row, col, s.length());
 }
 
-void NewLine::apply(Buffer& b) const
+bool NewLine::apply(Buffer& b) const
 {
-    
+    return b.new_line(row);
 }
 
-void DeleteLine::apply(Buffer& b) const
+bool DeleteLine::apply(Buffer& b) const
 {
-    
+    return b.delete_line(row);
 }
 
 bool Buffer::go_to_line(size_t row)
@@ -92,22 +113,104 @@ bool Buffer::insert(size_t row, size_t col, const std::string& s)
     } else return false;
 }
 
-bool Buffer::erase(size_t row, size_t col, const std::string& s)
+bool Buffer::erase(size_t row, size_t col, size_t len)
 {
+    if (!go_to_line(row)) return false;
 
+    if (current->content.length() + 1 < col + len) return false;
+    
+    current->content.erase(col - 1, len);
+    return true;
 }
 
 bool Buffer::new_line(size_t row)
 {
+    /* special case of when row == 1
+     * we must update the first_line entry
+     */
+    if (row == 1) {
+	Line* l = new Line;
+	l->next = first;
+	first->prev = l;
+	first = l;
+	++num_lines;
+	return true;
+    }
 
+    if (!go_to_line(row - 1)) return false;
+
+    Line* l = new Line;
+    l->prev = current;
+    l->next = current->next;
+    current->next = l;
+    ++num_lines;
+    current = l;
+
+    if (!current->next)
+	last = current;
+
+    ++current_line;
+
+    return true;
+}
+
+bool Buffer::transform(Transformation* t)
+{
+    t->apply(*this);
+    history.emplace_back(t);
+    history_index += 1;
+}
+
+bool Buffer::undo()
+{
+    if (history_index == -1) return false; // There is nothing to be undone
+
+    history[history_index]->inverted()->apply(*this);
+
+    history_index -= 1;
+}
+
+bool Buffer::redo()
+{
+    if (history_index + 1 == history.size()) return false; // There is nothing to be redone
+
+    history_index += 1;
+
+    history[history_index]->apply(*this);
 }
 
 bool Buffer::delete_line(size_t row)
 {
+    if (row > num_lines || row < 1 || num_lines == 1) return false;
 
+    if (!go_to_line(row)) return false;
+
+    if (current->content.length()) return false;
+
+    if (current->next) current->next->prev = current->prev;
+    if (current->prev) current->prev->next = current->next;
+
+    delete current;
+
+    current = row == 1 ? current->next : current->prev;
+    current_line = row == 1 ? 1 : row - 1;
+
+    num_lines -= 1;
+
+    return true;
 }
 
-int main()
+void Buffer::draw()
 {
+    while (current->prev)
+	current = current->prev;
 
+    while (current->next) {
+	std::cout << current->content << '\n';
+	current = current->next;
+    }
+
+    std::cout << current->content << '\n';
+
+    current_line = num_lines;
 }
