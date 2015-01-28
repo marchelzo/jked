@@ -1,12 +1,52 @@
 #include <iostream>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 
+#include "graphics.hpp"
 #include "buffer.hpp"
+#include "config.hpp"
 
 Line::Line():
+    texture {nullptr},
+    rect {0,0,0,0},
     prev {nullptr},
     content {},
-    next {nullptr}
+    next {nullptr},
+    modified {true}
 {
+}
+
+void Line::update_texture()
+{
+    SDL_Surface* s = TTF_RenderText_Blended(Graphics::font, content.c_str(), Config::font_color);
+    if (!s) { /* TODO do some error reporting here */ return; }
+
+    rect.w = s->w;
+    rect.h = s->h;
+    SDL_Texture* t = SDL_CreateTextureFromSurface(Graphics::renderer, s);
+    
+    /* we've created our texture from the surface, and no longer need the surface */
+    SDL_FreeSurface(s);
+
+    if (!t) { /* TODO do some error reporting here, too */ return; }
+    
+    /* if we've gotten here, creating the new texture worked
+     * so we just delete the old one and replace it with the new
+     */
+    modified = false;
+    if (texture) SDL_DestroyTexture(texture);
+    texture = t;
+}
+
+SDL_Texture* Line::get_texture()
+{
+    if (modified) update_texture();
+    return texture;
+}
+
+void Line::modify()
+{
+    modified = true;
 }
 
 Buffer::Buffer():
@@ -84,23 +124,21 @@ bool DeleteLine::apply(Buffer& b) const
     return b.delete_line(row);
 }
 
-bool Buffer::go_to_line(size_t row)
+bool Buffer::go_to_line(size_t row) const
 {
     if (row > num_lines || row < 1) return false;
 
-    if (row > current_line) {
-	while (row > current_line) {
-	    current = current->prev;
-	    --current_line;
-	    if (!current) return false;
-	}
-    } else {
-	while (row < current_line) {
-	    current = current->next;
-	    ++current_line;
-	    if (!current) return false;
-	}
+    while (row < current_line) {
+	current = current->prev;
+	--current_line;
+	if (!current) return false;
     }
+    while (row > current_line) {
+	current = current->next;
+	++current_line;
+	if (!current) return false;
+    }
+
     return true;
 }
 
@@ -109,6 +147,7 @@ bool Buffer::insert(size_t row, size_t col, const std::string& s)
     if (go_to_line(row)) {
 	if (current->content.length() < col - 1) return false;
 	current->content.insert(col - 1, s);
+	current->modify();
 	return true;
     } else return false;
 }
@@ -120,6 +159,7 @@ bool Buffer::erase(size_t row, size_t col, size_t len)
     if (current->content.length() + 1 < col + len) return false;
     
     current->content.erase(col - 1, len);
+    current->modify();
     return true;
 }
 
@@ -134,6 +174,7 @@ bool Buffer::new_line(size_t row)
 	first->prev = l;
 	first = l;
 	++num_lines;
+	current_line += 1;
 	return true;
     }
 
@@ -206,17 +247,36 @@ bool Buffer::delete_line(size_t row)
     return true;
 }
 
-void Buffer::draw()
+void Buffer::draw(size_t fst, size_t n)
 {
-    while (current->prev)
-	current = current->prev;
+    if (fst < 1 || fst > num_lines) return;
 
-    while (current->next) {
-	std::cout << current->content << '\n';
-	current = current->next;
+    Line* original = current;
+    size_t original_number = current_line;
+
+    if (!go_to_line(fst)) return;
+
+    /* here we draw the line textures */
+    SDL_Rect rect {0,0,0,0};
+    for (size_t i = 0; i < n && current; ++i, current = current->next) {
+	if (current->content.length() == 0) continue;
+	rect.w = current->rect.w;
+	rect.h = current->rect.h;
+	SDL_RenderCopy(Graphics::renderer, current->get_texture(), nullptr, &rect);
+	rect.y += rect.h;
     }
+    
+    current = original;
+    current_line = original_number;
+}
 
-    std::cout << current->content << '\n';
+const std::string& Buffer::get_line(size_t row) const
+{
+    if (!go_to_line(row)) return nullptr;
+    return current->content;
+}
 
-    current_line = num_lines;
+size_t Buffer::get_num_lines() const
+{
+    return num_lines;
 }
